@@ -95,13 +95,14 @@ def visualize_ground_truth_and_prediction_separately(model, dataset, idx=0, conf
         y = (y_center - h/2) * img.shape[1]
         w_box = w * img.shape[2]
         h_box = h * img.shape[1]
-        
-        if class_id == 0: #pd-l1 negative tumor cell
-            color = 'blue'
-        elif class_id == 1: #pd-l1 positive tumor cell
-            color = 'red'
-        else: #non-tumor cell
+        if class_id == 0: #class_0
             color = 'green'
+        elif class_id == 1: #class_1+
+            color = 'yellow'
+        elif class_id == 2: #Class_2+
+            color = 'blue'
+        else: #Class_3+
+            color = 'red'
         # 중심점 표시
         # 중심점 좌표 계산
         center_x = int(x + w_box / 2)
@@ -133,12 +134,15 @@ def visualize_ground_truth_and_prediction_separately(model, dataset, idx=0, conf
                 w_pred = x2 - x1
                 h_pred = y2 - y1
                 
-                if cls_id.item() == 0: #pd-l1 negative tumor cell
-                    color = 'blue'
-                elif cls_id.item() == 1: #pd-l1 positive tumor cell
-                    color = 'red'
-                else: #non-tumor cell
+                if cls_id.item() == 0: #class_0
                     color = 'green'
+                elif cls_id.item() == 1: #class_1+
+                    color = 'yellow'
+                elif cls_id.item() == 2: #Class_2+
+                    color = 'blue'
+                else: #Class_3+
+                    color = 'red'
+                
                 center_x = (x1 + x2)//2
                 center_y = (y1 + y2)//2
                 ax2.scatter(center_x, center_y, facecolors='none',  s=20, marker='o', edgecolors=color, linewidths=1)
@@ -163,9 +167,10 @@ def visualize_ground_truth_and_prediction_separately(model, dataset, idx=0, conf
     
     # 범례 추가
     legend_elements = [
-        patches.Patch(color='blue', label='negative tumor cell'),
-        patches.Patch(color='red', label='positive tumor cell'),
-        patches.Patch(color='green', label='non-tumor cell'),
+        patches.Patch(color='green', label='Class_0'),
+        patches.Patch(color='yellow', label='Class_1+'),
+        patches.Patch(color='blue', label='Class_2+'),
+        patches.Patch(color='red', label='Class_3+'),
     ]
     fig.legend(handles=legend_elements, loc='lower center', ncol=3, 
                bbox_to_anchor=(0.5, 0.02), fontsize=12)
