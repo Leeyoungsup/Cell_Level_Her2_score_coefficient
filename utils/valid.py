@@ -9,10 +9,14 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 def plot_training_progress(train_losses, val_det_recalls, val_cls_accs, val_macro_precisions, 
-                          val_macro_recalls, val_macro_f1s, epoch, save_dir):
-    """학습 진행 상황을 3x2 subplot으로 시각화하고 저장하는 함수 (Point-label 메트릭 전용)"""
+                          val_macro_recalls, val_macro_f1s, epoch, save_dir, class_stats_history=None):
+    """학습 진행 상황을 4x2 subplot으로 시각화하고 저장하는 함수 (Point-label 메트릭 전용 + 클래스별 성능)"""
     
-    fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2, figsize=(15, 18))
+    # 클래스별 통계 포함 여부에 따라 subplot 구성 변경
+    if class_stats_history is not None and len(class_stats_history) > 0:
+        fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6), (ax7, ax8)) = plt.subplots(4, 2, figsize=(15, 24))
+    else:
+        fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2, figsize=(15, 18))
     
     epochs_range = range(1, len(train_losses) + 1)
     
@@ -67,8 +71,62 @@ def plot_training_progress(train_losses, val_det_recalls, val_cls_accs, val_macr
     ax6.grid(True, alpha=0.3)
     ax6.legend()
     
+    # 7. 클래스별 F1-score (class_stats_history가 있을 경우)
+    if class_stats_history is not None and len(class_stats_history) > 0:
+        class_names = ['class_0', 'class_1+', 'class_2+', 'class_3+']
+        class_colors = ['green', 'gold', 'blue', 'red']
+        
+        # 클래스별 F1 데이터 추출
+        for class_idx, (class_name, color) in enumerate(zip(class_names, class_colors)):
+            class_f1_values = []
+            for stats in class_stats_history:
+                if class_name in stats:
+                    class_f1_values.append(stats[class_name]['f1'])
+                else:
+                    class_f1_values.append(0)
+            ax7.plot(epochs_range, class_f1_values, color=color, linewidth=2, 
+                    label=class_name, marker='o', markersize=3, alpha=0.8)
+        
+        ax7.set_title('Per-Class F1-Score', fontsize=14, fontweight='bold')
+        ax7.set_xlabel('Epoch')
+        ax7.set_ylabel('F1-Score')
+        ax7.grid(True, alpha=0.3)
+        ax7.legend()
+        ax7.set_ylim([0, 1])
+        
+        # 8. 클래스별 Precision & Recall
+        for class_idx, (class_name, color) in enumerate(zip(class_names, class_colors)):
+            class_precision_values = []
+            class_recall_values = []
+            for stats in class_stats_history:
+                if class_name in stats:
+                    class_precision_values.append(stats[class_name]['precision'])
+                    class_recall_values.append(stats[class_name]['recall'])
+                else:
+                    class_precision_values.append(0)
+                    class_recall_values.append(0)
+            
+            # Precision (실선)
+            ax8.plot(epochs_range, class_precision_values, color=color, linewidth=2, 
+                    linestyle='-', label=f'{class_name} P', alpha=0.7)
+            # Recall (점선)
+            ax8.plot(epochs_range, class_recall_values, color=color, linewidth=2, 
+                    linestyle='--', label=f'{class_name} R', alpha=0.7)
+        
+        ax8.set_title('Per-Class Precision (—) & Recall (- -)', fontsize=14, fontweight='bold')
+        ax8.set_xlabel('Epoch')
+        ax8.set_ylabel('Score')
+        ax8.grid(True, alpha=0.3)
+        ax8.legend(ncol=2, fontsize=9)
+        ax8.set_ylim([0, 1])
+    
     # 전체 제목
-    fig.suptitle(f'Training Progress (Point-Label Metrics) - Epoch {epoch}', fontsize=16, fontweight='bold')
+    if class_stats_history is not None and len(class_stats_history) > 0:
+        fig.suptitle(f'Training Progress (Point-Label Metrics + Per-Class Stats) - Epoch {epoch}', 
+                     fontsize=16, fontweight='bold')
+    else:
+        fig.suptitle(f'Training Progress (Point-Label Metrics) - Epoch {epoch}', 
+                     fontsize=16, fontweight='bold')
     
     # 최신 값들을 텍스트로 표시
     if len(train_losses) > 0:
@@ -77,6 +135,16 @@ Train Loss: {train_losses[-1]:.4f}
 Macro F1: {val_macro_f1s[-1]:.4f} | Det Recall: {val_det_recalls[-1]:.4f} | Cls Acc: {val_cls_accs[-1]:.4f}
 Macro Precision: {val_macro_precisions[-1]:.4f} | Macro Recall: {val_macro_recalls[-1]:.4f}
 Best Macro F1: {max(val_macro_f1s):.4f} (Epoch {val_macro_f1s.index(max(val_macro_f1s))+1})"""
+        
+        # 클래스별 통계가 있으면 추가
+        if class_stats_history is not None and len(class_stats_history) > 0:
+            latest_class_stats = class_stats_history[-1]
+            latest_info += "\n\nPer-Class F1 (Latest):"
+            class_names = ['class_0', 'class_1+', 'class_2+', 'class_3+']
+            for class_name in class_names:
+                if class_name in latest_class_stats:
+                    f1_val = latest_class_stats[class_name]['f1']
+                    latest_info += f"\n  {class_name}: {f1_val:.4f}"
         
         fig.text(0.02, 0.02, latest_info, fontsize=10, 
                 bbox=dict(boxstyle="round,pad=0.5", facecolor='lightblue', alpha=0.8))
