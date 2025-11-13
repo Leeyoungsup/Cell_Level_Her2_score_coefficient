@@ -211,7 +211,8 @@ def compute_validation_metrics(model, val_loader, device, params):
                 val_outputs = model(val_images)
             
             # NMS for metric calculation
-            outputs = util.non_max_suppression(val_outputs)
+            # Point 라벨에 최적화된 threshold 사용
+            outputs = util.non_max_suppression(val_outputs, confidence_threshold=0.25, iou_threshold=0.45)
             
             # Metrics calculation
             for i, output in enumerate(outputs):
@@ -318,22 +319,22 @@ def compute_validation_metrics(model, val_loader, device, params):
 
 
 def compute_validation_metrics_with_kappa(model, val_loader, device, params):
-    """Cohen's Kappa를 포함한 검증 메트릭 계산"""
+    """Cohen's Kappa를 포함한 검증 메트릭 계산 - 개선 버전"""
     try:
         from sklearn.metrics import cohen_kappa_score
+        from scipy.optimize import linear_sum_assignment
     except ImportError:
-        print("경고: scikit-learn이 설치되지 않아 Cohen's Kappa를 계산할 수 없습니다.")
+        print("경고: scikit-learn 또는 scipy가 설치되지 않아 Cohen's Kappa를 계산할 수 없습니다.")
         precision, recall, map50, mean_ap = compute_validation_metrics(model, val_loader, device, params)
         return precision, recall, map50, mean_ap, 0.0
     
     # 기본 메트릭 계산
     precision, recall, map50, mean_ap = compute_validation_metrics(model, val_loader, device, params)
     
-    # Cohen's Kappa 계산을 위한 grid 기반 비교
+    # Cohen's Kappa 계산 - 객체 매칭 기반
     model.eval()
-    grid_size = 16  # 16x16 grid로 이미지 분할
-    all_gt_labels = []
-    all_pred_labels = []
+    all_gt_classes = []
+    all_pred_classes = []
     
     with torch.no_grad():
         for batch_idx, (images, targets) in enumerate(val_loader):
@@ -344,48 +345,76 @@ def compute_validation_metrics_with_kappa(model, val_loader, device, params):
                 pred = model(images)
             
             # NMS 적용
-            results = util.non_max_suppression(pred, confidence_threshold=0.1, iou_threshold=0.3)
-
-            # 각 이미지에 대해 grid 기반 라벨링
+            results = util.non_max_suppression(pred, confidence_threshold=0.25, iou_threshold=0.45)
+            
+            # 각 이미지에 대해 처리
             for i in range(len(images)):
-                gt_grid = np.zeros((grid_size, grid_size), dtype=int)  # 0: 배경, 1: negative, 2: positive
-                pred_grid = np.zeros((grid_size, grid_size), dtype=int)
-                
-                # Ground truth 처리
+                # Ground truth
                 cls_targets = targets['cls']
                 box_targets = targets['box']
                 idx_targets = targets['idx']
                 
-                # 해당 이미지의 타겟만 필터링
                 batch_mask = idx_targets == i
-                if batch_mask.any():
-                    batch_cls = cls_targets[batch_mask]
-                    batch_box = box_targets[batch_mask]
-                    
-                    for cls, box in zip(batch_cls, batch_box):
-                        x_center, y_center = box[0].item(), box[1].item()
-                        grid_x = min(int(x_center * grid_size), grid_size - 1)
-                        grid_y = min(int(y_center * grid_size), grid_size - 1)
-                        gt_grid[grid_y, grid_x] = cls.item() + 1  # 0→1, 1→2
+                if not batch_mask.any():
+                    continue
                 
-                # Predictions 처리
+                batch_cls = cls_targets[batch_mask].cpu().numpy()
+                batch_box = box_targets[batch_mask].cpu().numpy()
+                
+                # Predictions
                 if len(results) > i and len(results[i]) > 0:
-                    for *xyxy, conf, cls_id in results[i]:
-                        x1, y1, x2, y2 = xyxy
-                        x_center = ((x1 + x2) / 2).item() / 512  # 정규화
-                        y_center = ((y1 + y2) / 2).item() / 512
+                    pred_boxes = results[i][:, :4].cpu().numpy()  # xyxy
+                    pred_classes = results[i][:, 5].cpu().numpy()  # class
+                    
+                    # GT box를 xyxy로 변환
+                    gt_boxes_xyxy = []
+                    for box in batch_box:
+                        x_center, y_center, w, h = box
+                        x1 = (x_center - w/2) * 512
+                        y1 = (y_center - h/2) * 512
+                        x2 = (x_center + w/2) * 512
+                        y2 = (y_center + h/2) * 512
+                        gt_boxes_xyxy.append([x1, y1, x2, y2])
+                    gt_boxes_xyxy = np.array(gt_boxes_xyxy)
+                    
+                    # IoU 행렬 계산
+                    iou_matrix = compute_iou_matrix(gt_boxes_xyxy, pred_boxes)
+                    
+                    # Hungarian Algorithm으로 최적 매칭
+                    if iou_matrix.size > 0 and iou_matrix.shape[0] > 0 and iou_matrix.shape[1] > 0:
+                        gt_indices, pred_indices = linear_sum_assignment(-iou_matrix)
                         
-                        grid_x = min(int(x_center * grid_size), grid_size - 1)
-                        grid_y = min(int(y_center * grid_size), grid_size - 1)
-                        pred_grid[grid_y, grid_x] = cls_id.item() + 1
-                
-                all_gt_labels.extend(gt_grid.flatten())
-                all_pred_labels.extend(pred_grid.flatten())
+                        # IoU 임계값 이상인 매칭만 사용
+                        iou_threshold = 0.3
+                        for gt_idx, pred_idx in zip(gt_indices, pred_indices):
+                            if iou_matrix[gt_idx, pred_idx] >= iou_threshold:
+                                all_gt_classes.append(int(batch_cls[gt_idx]))
+                                all_pred_classes.append(int(pred_classes[pred_idx]))
+                        
+                        # 매칭되지 않은 GT (False Negatives) - 실제로는 있지만 예측 못함
+                        unmatched_gt_mask = np.ones(len(batch_cls), dtype=bool)
+                        for gt_idx, pred_idx in zip(gt_indices, pred_indices):
+                            if iou_matrix[gt_idx, pred_idx] >= iou_threshold:
+                                unmatched_gt_mask[gt_idx] = False
+                        
+                        for gt_idx in np.where(unmatched_gt_mask)[0]:
+                            all_gt_classes.append(int(batch_cls[gt_idx]))
+                            # 예측이 없으므로 임의의 다른 클래스로 간주 (완전 불일치)
+                            # 모든 클래스 중 GT가 아닌 클래스 선택
+                            wrong_class = (int(batch_cls[gt_idx]) + 1) % 4
+                            all_pred_classes.append(wrong_class)
+                else:
+                    # 예측이 없는 경우 - 모든 GT를 False Negative로
+                    for cls in batch_cls:
+                        all_gt_classes.append(int(cls))
+                        # 예측 없음을 나타내기 위해 GT와 다른 클래스로
+                        wrong_class = (int(cls) + 1) % 4
+                        all_pred_classes.append(wrong_class)
     
     # Cohen's Kappa 계산
     try:
-        if len(all_gt_labels) > 0 and len(all_pred_labels) > 0:
-            kappa = cohen_kappa_score(all_gt_labels, all_pred_labels)
+        if len(all_gt_classes) > 0 and len(all_pred_classes) > 0:
+            kappa = cohen_kappa_score(all_gt_classes, all_pred_classes)
         else:
             kappa = 0.0
     except Exception as e:
@@ -393,6 +422,37 @@ def compute_validation_metrics_with_kappa(model, val_loader, device, params):
         kappa = 0.0
     
     return precision, recall, map50, mean_ap, kappa
+
+
+def compute_iou_matrix(boxes1, boxes2):
+    """
+    두 박스 집합 간의 IoU 행렬 계산
+    boxes: [N, 4] (x1, y1, x2, y2)
+    """
+    if len(boxes1) == 0 or len(boxes2) == 0:
+        return np.zeros((len(boxes1), len(boxes2)))
+    
+    # 면적 계산
+    area1 = (boxes1[:, 2] - boxes1[:, 0]) * (boxes1[:, 3] - boxes1[:, 1])
+    area2 = (boxes2[:, 2] - boxes2[:, 0]) * (boxes2[:, 3] - boxes2[:, 1])
+    
+    # IoU 행렬
+    iou_matrix = np.zeros((len(boxes1), len(boxes2)))
+    
+    for i in range(len(boxes1)):
+        for j in range(len(boxes2)):
+            # 교집합
+            x1 = max(boxes1[i, 0], boxes2[j, 0])
+            y1 = max(boxes1[i, 1], boxes2[j, 1])
+            x2 = min(boxes1[i, 2], boxes2[j, 2])
+            y2 = min(boxes1[i, 3], boxes2[j, 3])
+            
+            if x2 > x1 and y2 > y1:
+                intersection = (x2 - x1) * (y2 - y1)
+                union = area1[i] + area2[j] - intersection
+                iou_matrix[i, j] = intersection / union if union > 0 else 0
+    
+    return iou_matrix
 
 
 def get_kappa_interpretation(kappa):
