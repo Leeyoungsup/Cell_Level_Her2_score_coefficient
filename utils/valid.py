@@ -8,17 +8,11 @@ import numpy as np
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-def plot_training_progress(train_losses, val_maps, val_precisions, val_recalls, val_map50s, epoch, save_dir, 
-                          val_det_recalls=None, val_cls_accs=None, val_macro_f1s=None):
-    """학습 진행 상황을 3x2 subplot으로 시각화하고 저장하는 함수 (Point-label 메트릭 포함)"""
+def plot_training_progress(train_losses, val_det_recalls, val_cls_accs, val_macro_precisions, 
+                          val_macro_recalls, val_macro_f1s, epoch, save_dir):
+    """학습 진행 상황을 3x2 subplot으로 시각화하고 저장하는 함수 (Point-label 메트릭 전용)"""
     
-    # Point-label 메트릭이 있으면 3x2, 없으면 2x2
-    if val_det_recalls is not None and val_cls_accs is not None and val_macro_f1s is not None:
-        fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2, figsize=(15, 18))
-        show_point_metrics = True
-    else:
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
-        show_point_metrics = False
+    fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6)) = plt.subplots(3, 2, figsize=(15, 18))
     
     epochs_range = range(1, len(train_losses) + 1)
     
@@ -30,74 +24,65 @@ def plot_training_progress(train_losses, val_maps, val_precisions, val_recalls, 
     ax1.grid(True, alpha=0.3)
     ax1.legend()
     
-    # 2. mAP@0.5:0.95 (IoU-based)
-    ax2.plot(epochs_range, val_maps, 'g-', linewidth=2, label='mAP@0.5:0.95')
-    ax2.set_title('Validation mAP@0.5:0.95 (IoU-based)', fontsize=14, fontweight='bold')
+    # 2. Macro F1-score (주요 지표)
+    ax2.plot(epochs_range, val_macro_f1s, 'darkgreen', linewidth=2, label='Macro F1-score ⭐')
+    ax2.set_title('Macro F1-score (Primary Metric)', fontsize=14, fontweight='bold')
     ax2.set_xlabel('Epoch')
-    ax2.set_ylabel('mAP')
+    ax2.set_ylabel('Macro F1')
     ax2.grid(True, alpha=0.3)
     ax2.legend()
     
-    # 3. Precision & Recall (IoU-based)
-    ax3.plot(epochs_range, val_precisions, 'orange', linewidth=2, label='Precision (IoU)')
-    ax3.plot(epochs_range, val_recalls, 'red', linewidth=2, label='Recall (IoU)')
-    ax3.set_title('Validation Precision & Recall (IoU-based)', fontsize=14, fontweight='bold')
+    # 3. Detection Recall
+    ax3.plot(epochs_range, val_det_recalls, 'cyan', linewidth=2, label='Detection Recall')
+    ax3.set_title('Detection Recall (GT 중 찾은 비율)', fontsize=14, fontweight='bold')
     ax3.set_xlabel('Epoch')
-    ax3.set_ylabel('Score')
+    ax3.set_ylabel('Detection Recall')
     ax3.grid(True, alpha=0.3)
     ax3.legend()
     
-    # 4. mAP@0.5 (IoU-based)
-    ax4.plot(epochs_range, val_map50s, 'purple', linewidth=2, label='mAP@0.5')
-    ax4.set_title('Validation mAP@0.5 (IoU-based)', fontsize=14, fontweight='bold')
+    # 4. Classification Accuracy
+    ax4.plot(epochs_range, val_cls_accs, 'magenta', linewidth=2, label='Classification Accuracy')
+    ax4.set_title('Classification Accuracy (분류 정확도)', fontsize=14, fontweight='bold')
     ax4.set_xlabel('Epoch')
-    ax4.set_ylabel('mAP@0.5')
+    ax4.set_ylabel('Accuracy')
     ax4.grid(True, alpha=0.3)
     ax4.legend()
     
-    # Point-label 메트릭 표시
-    if show_point_metrics:
-        # 5. Detection Recall & Classification Accuracy (Point-label)
-        ax5.plot(epochs_range, val_det_recalls, 'cyan', linewidth=2, label='Detection Recall')
-        ax5.plot(epochs_range, val_cls_accs, 'magenta', linewidth=2, label='Classification Accuracy')
-        ax5.set_title('Point-Label: Detection & Classification', fontsize=14, fontweight='bold')
-        ax5.set_xlabel('Epoch')
-        ax5.set_ylabel('Score')
-        ax5.grid(True, alpha=0.3)
-        ax5.legend()
-        
-        # 6. Macro F1-score (Point-label - 주요 지표)
-        ax6.plot(epochs_range, val_macro_f1s, 'darkgreen', linewidth=2, label='Macro F1-score ⭐')
-        ax6.set_title('Point-Label: Macro F1-score (Primary Metric)', fontsize=14, fontweight='bold')
-        ax6.set_xlabel('Epoch')
-        ax6.set_ylabel('Macro F1')
-        ax6.grid(True, alpha=0.3)
-        ax6.legend()
+    # 5. Macro Precision & Recall
+    ax5.plot(epochs_range, val_macro_precisions, 'orange', linewidth=2, label='Macro Precision')
+    ax5.plot(epochs_range, val_macro_recalls, 'red', linewidth=2, label='Macro Recall')
+    ax5.set_title('Macro Precision & Recall', fontsize=14, fontweight='bold')
+    ax5.set_xlabel('Epoch')
+    ax5.set_ylabel('Score')
+    ax5.grid(True, alpha=0.3)
+    ax5.legend()
+    
+    # 6. Detection & Classification 통합
+    ax6.plot(epochs_range, val_det_recalls, 'cyan', linewidth=2, label='Detection Recall', alpha=0.7)
+    ax6.plot(epochs_range, val_cls_accs, 'magenta', linewidth=2, label='Classification Accuracy', alpha=0.7)
+    ax6.plot(epochs_range, val_macro_f1s, 'darkgreen', linewidth=3, label='Macro F1 ⭐')
+    ax6.set_title('Overall Performance', fontsize=14, fontweight='bold')
+    ax6.set_xlabel('Epoch')
+    ax6.set_ylabel('Score')
+    ax6.grid(True, alpha=0.3)
+    ax6.legend()
     
     # 전체 제목
-    fig.suptitle(f'Training Progress - Epoch {epoch}', fontsize=16, fontweight='bold')
+    fig.suptitle(f'Training Progress (Point-Label Metrics) - Epoch {epoch}', fontsize=16, fontweight='bold')
     
     # 최신 값들을 텍스트로 표시
     if len(train_losses) > 0:
-        if show_point_metrics:
-            latest_info = f"""Latest Values (Epoch {len(train_losses)}):
-Train Loss: {train_losses[-1]:.4f} | mAP@0.5:0.95: {val_maps[-1]:.4f}
-[Point-Label] Macro F1: {val_macro_f1s[-1]:.4f} | Det Recall: {val_det_recalls[-1]:.4f} | Cls Acc: {val_cls_accs[-1]:.4f}
+        latest_info = f"""Latest Values (Epoch {len(train_losses)}):
+Train Loss: {train_losses[-1]:.4f}
+Macro F1: {val_macro_f1s[-1]:.4f} | Det Recall: {val_det_recalls[-1]:.4f} | Cls Acc: {val_cls_accs[-1]:.4f}
+Macro Precision: {val_macro_precisions[-1]:.4f} | Macro Recall: {val_macro_recalls[-1]:.4f}
 Best Macro F1: {max(val_macro_f1s):.4f} (Epoch {val_macro_f1s.index(max(val_macro_f1s))+1})"""
-        else:
-            latest_info = f"""Latest Values (Epoch {len(train_losses)}):
-Train Loss: {train_losses[-1]:.4f} | mAP@0.5:0.95: {val_maps[-1]:.4f}
-Precision: {val_precisions[-1]:.4f} | Recall: {val_recalls[-1]:.4f} | mAP@0.5: {val_map50s[-1]:.4f}
-Best mAP@0.5:0.95: {max(val_maps):.4f} (Epoch {val_maps.index(max(val_maps))+1})"""
         
         fig.text(0.02, 0.02, latest_info, fontsize=10, 
                 bbox=dict(boxstyle="round,pad=0.5", facecolor='lightblue', alpha=0.8))
     
     plt.tight_layout()
-    if show_point_metrics:
-        plt.subplots_adjust(top=0.95, bottom=0.10)
-    else:
-        plt.subplots_adjust(top=0.93, bottom=0.15)
+    plt.subplots_adjust(top=0.95, bottom=0.10)
     
     # 저장
     save_path = os.path.join(save_dir, f'training_progress_epoch_{epoch}.png')
